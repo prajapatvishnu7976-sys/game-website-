@@ -1,5 +1,4 @@
 'use strict';
-
 class KnifeHit {
     constructor(canvas, onScore, options = {}) {
         this.canvas    = canvas;
@@ -14,31 +13,36 @@ class KnifeHit {
         this.isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
             || ('ontouchstart' in window) || (window.innerWidth < 768);
 
-        // ═══ HD FIX: Real DPR for everything ═══
-        this.dpr     = Math.min(window.devicePixelRatio || 1, 3);
-        this.textDpr = this.dpr;
+        // ── DPR: game objects use 1x on mobile for perf, text always uses real DPR ──
+        this.dpr     = this.isMobile ? 1 : Math.min(window.devicePixelRatio || 1, 2);
+        this.textDpr = Math.min(window.devicePixelRatio || 1, 3); // Always crisp text
 
         this.setupCanvas();
         this.ctx = this.canvas.getContext('2d', { alpha: false });
-        this.recalcLogicalSize();
+        this.W   = this.canvas.width  / this.dpr;
+        this.H   = this.canvas.height / this.dpr;
 
         this.isSmallScreen = this.W < 380;
         this.TAU = Math.PI * 2;
 
-        this.MAX_PARTICLES = this.isMobile ? 50 : 120;
-        this.MAX_POP_RINGS = this.isMobile ? 8  : 16;
-        this.MAX_TRAIL     = this.isMobile ? 8  : 14;
+        // ── PERFORMANCE LIMITS ──
+        this.MAX_PARTICLES = this.isMobile ? 40 : 120;
+        this.MAX_POP_RINGS = this.isMobile ? 6  : 16;
+        this.MAX_TRAIL     = this.isMobile ? 6  : 14;
 
         this.FONT_TITLE = '"Orbitron", monospace';
         this.FONT_UI    = '"Rajdhani", sans-serif';
 
+        // ── AUDIO ──
         this.audioCtx   = null;
         this.masterGain = null;
         this.audioReady = false;
 
+        // ── SAVE ──
         this.saveKey    = 'neonarcade_knifehit_v8';
         this.playerData = this.loadPlayerData();
 
+        // ── GAME STATE ──
         this.score        = 0;
         this.level        = this.playerData.currentLevel || 1;
         this.stage        = 1;
@@ -56,15 +60,19 @@ class KnifeHit {
         this.hitPulseTimer = 0;
         this.levelStartTime = Date.now();
 
+        // ── KNIFE ──
         this.knivesTotal  = 0;
         this.knivesLeft   = 0;
         this.knivesThrown = 0;
 
+        // ── NO KNIVES STATE ──
         this.noKnivesLeft         = false;
         this.noKnivesOverlayAlpha = 0;
 
+        // ── TARGET ──
         this.target = this.createTarget();
 
+        // ── SKINS ──
         this.knifeSkins = {
             default: { blade:['#aaa','#e8e8e8','#fff'],      handle:['#2a0e04','#5a2a0e','#2a0e04'], guard:'#777',    name:'Classic' },
             neon:    { blade:['#00c4ef','#55e8ff','#fff'],    handle:['#081828','#10305a','#081828'], guard:'#00c4ef', name:'Neon'    },
@@ -74,12 +82,14 @@ class KnifeHit {
         };
         this.currentSkin = this.playerData.currentSkin || 'default';
 
+        // ── OBJECTS ──
         this.stuckKnives   = [];
         this.flyingKnife   = null;
         this.idleKnife     = null;
         this.apples        = [];
         this.orbitCoins    = [];
 
+        // ── FX POOLS ──
         this.particles      = [];
         this.explosions     = [];
         this.scorePopups    = [];
@@ -90,20 +100,24 @@ class KnifeHit {
         this.trailParticles = [];
         this.shockwaves     = [];
 
+        // ── SCREEN FX ──
         this.shakeX = 0; this.shakeY = 0;
         this.shakeTimer = 0; this.shakeForce = 0;
         this.flashTimer = 0; this.flashColor = '#ff0055';
         this.vignetteFlash = 0; this.vignetteColor = '#ff0055';
 
+        // ── TIMING ──
         this.time  = 0;
         this.frame = 0;
 
+        // ── FLAGS ──
         this.stageComplete      = false;
         this.stageCompleteTimer = 0;
         this.hudFlash           = {};
         this.showNewRecord      = false;
         this.newRecordTimer     = 0;
 
+        // ── POWER-UPS ──
         this.powerUps = {
             extraKnife: { count: this.playerData.powerUps?.extraKnife ?? 2, icon:'🗡', name:'Extra',  color:'#00FF88' },
             slowTarget: { count: this.playerData.powerUps?.slowTarget ?? 1, icon:'🐢', name:'Slow',   color:'#00D4FF' },
@@ -112,17 +126,21 @@ class KnifeHit {
         };
         this.activeEffects = { slow:false, slowTimer:0, shield:false };
 
+        // ── DAILY REWARD ──
         this.showDailyReward    = false;
         this.dailyRewardClaimed = false;
         this.dailyRewardAnim    = 0;
         this.checkDailyReward();
 
+        // ── MILESTONES ──
         this.milestones        = [5,10,20,30,50,75,100,150,200];
         this.milestonesClaimed = new Set();
 
+        // ── BG ──
         this.stars   = this.makeStars(this.isMobile ? 25 : 70);
         this.nebulae = this.makeNebulae();
 
+        // ── INIT ──
         this.setupLevel();
         this.createIdleKnife();
         this.bindEvents();
@@ -132,14 +150,13 @@ class KnifeHit {
     }
 
     /* ════════════════════════════════════
-       CANVAS SETUP — HD DPR-AWARE
+       CANVAS SETUP — correct sizing
     ════════════════════════════════════ */
     setupCanvas() {
         const wrapper = this.canvas.parentElement;
         let w, h;
 
         if (wrapper) {
-            wrapper.offsetHeight;
             const rect = wrapper.getBoundingClientRect();
             w = rect.width  || wrapper.clientWidth  || window.innerWidth;
             h = rect.height || wrapper.clientHeight || window.innerHeight;
@@ -148,6 +165,7 @@ class KnifeHit {
             h = window.innerHeight;
         }
 
+        // Ensure positive dimensions
         w = Math.max(w, 200);
         h = Math.max(h, 300);
 
@@ -155,14 +173,6 @@ class KnifeHit {
         this.canvas.style.height = h + 'px';
         this.canvas.width  = Math.round(w * this.dpr);
         this.canvas.height = Math.round(h * this.dpr);
-
-        this._cssW = w;
-        this._cssH = h;
-    }
-
-    recalcLogicalSize() {
-        this.W = this._cssW || (this.canvas.width  / this.dpr);
-        this.H = this._cssH || (this.canvas.height / this.dpr);
     }
 
     /* ════════════════════════════════════
@@ -171,13 +181,15 @@ class KnifeHit {
     clamp(v,mn,mx){ return Math.max(mn, Math.min(mx, v)); }
     rand(mn,mx)   { return mn + Math.random() * (mx - mn); }
 
+    // Game-space to canvas-pixel
     gX(x) { return (x * this.dpr + 0.5) | 0; }
     gY(y) { return (y * this.dpr + 0.5) | 0; }
     gS(s) { return s * this.dpr; }
     gSr(s){ return (s * this.dpr + 0.5) | 0; }
 
     /* ════════════════════════════════════
-       CRISP TEXT — UNIFIED DPR
+       CRISP TEXT — uses textDpr for sharp rendering
+       Key fix: font size scaled by textDpr, coords by textDpr
     ════════════════════════════════════ */
     drawText(ctx, text, x, y, opts = {}) {
         const {
@@ -196,25 +208,28 @@ class KnifeHit {
         ctx.textAlign    = align;
         ctx.textBaseline = baseline;
 
-        const d   = this.dpr;
-        const fam = family || (size > 16 ? this.FONT_TITLE : this.FONT_UI);
-        ctx.font  = `${weight} ${Math.round(size * d)}px ${fam}`;
+        // ── CRISP TEXT FIX: use textDpr for font + coords ──
+        const td   = this.textDpr;
+        const fam  = family || (size > 16 ? this.FONT_TITLE : this.FONT_UI);
+        ctx.font   = `${weight} ${Math.round(size * td)}px ${fam}`;
 
-        const px = (x * d + 0.5) | 0;
-        const py = (y * d + 0.5) | 0;
-        const mw = maxWidth ? maxWidth * d : undefined;
+        const px = (x * td + 0.5) | 0;
+        const py = (y * td + 0.5) | 0;
+        const mw = maxWidth ? maxWidth * td : undefined;
 
+        // Enable subpixel for text
         ctx.imageSmoothingEnabled = true;
 
         if (stroke) {
             ctx.strokeStyle = strokeColor;
-            ctx.lineWidth   = strokeWidth * d;
+            ctx.lineWidth   = strokeWidth * td;
             ctx.lineJoin    = 'round';
             ctx.strokeText(text, px, py, mw);
         }
 
+        // Glow only on desktop
         if (glow && glowBlur > 0 && !this.isMobile) {
-            ctx.shadowBlur  = glowBlur * d;
+            ctx.shadowBlur  = glowBlur * td;
             ctx.shadowColor = glowColor || color;
         }
 
@@ -1043,6 +1058,7 @@ class KnifeHit {
         ctx.save();ctx.translate(tx,ty);
 
         const glowPulse=0.28+Math.abs(Math.sin(this.time/220))*0.32;
+        // Skip shadow on mobile — big perf win
         if (!this.isMobile) { ctx.shadowBlur=t.bossMode?this.gS(32):this.gS(18); ctx.shadowColor=t.bossMode?'#ff0050':'#ff8c00'; }
         ctx.strokeStyle=t.bossMode?`rgba(255,0,50,${glowPulse})`:`rgba(255,140,60,${glowPulse*0.7})`;
         ctx.lineWidth=this.gS(5);
@@ -1123,7 +1139,7 @@ class KnifeHit {
     }
 
     /* ════════════════════════════════════
-       KNIFE SHAPE
+       KNIFE SHAPE — pointing UP
     ════════════════════════════════════ */
     drawKnifeAtShooter(ctx,skinName='default',scale=1) {
         const skin=this.knifeSkins[skinName]||this.knifeSkins.default;
@@ -1419,15 +1435,15 @@ class KnifeHit {
         this.drawText(ctx,`C ${this.fmtNum(this.playerData.coins)}`,W-10,18,{size:cF?12:10,weight:'bold',color:cF?'#fff':'#FFD700',align:'right',family:this.FONT_TITLE,glow:cF&&!this.isMobile,glowColor:'#FFD700',glowBlur:5});
         this.drawText(ctx,`D ${this.fmtNum(this.playerData.diamonds)}`,W-10,33,{size:dF?12:10,weight:'bold',color:dF?'#fff':'#00D4FF',align:'right',family:this.FONT_TITLE,glow:dF&&!this.isMobile,glowColor:'#00D4FF',glowBlur:5});
 
-        // ═══ HD FIX: Hearts using unified dpr ═══
         for (let i=0;i<this.maxLives;i++) {
             const alive=i<this.lives;
             ctx.save();
             if (alive&&!this.isMobile){ctx.shadowBlur=this.gS(6);ctx.shadowColor='#ff0055';}
-            ctx.font=`${Math.round(17*this.dpr)}px serif`;
+            // ── Use textDpr for crisp heart emoji ──
+            ctx.font=`${Math.round(17*this.textDpr)}px serif`;
             ctx.textAlign='right';ctx.textBaseline='alphabetic';
             ctx.globalAlpha=alive?1:0.16;ctx.fillStyle='#ff0055';
-            ctx.fillText('\u2665',(W-98-i*22)*this.dpr,24*this.dpr);
+            ctx.fillText('\u2665',(W-98-i*22)*this.textDpr,24*this.textDpr);
             ctx.restore();
         }
 
@@ -1567,35 +1583,15 @@ class KnifeHit {
 
     togglePause() { this.paused=!this.paused; this.isPaused=this.paused; return this.paused; }
 
-    /* ════════════════════════════════════
-       RESIZE — HD FIX
-    ════════════════════════════════════ */
     resize() {
-        // Recalculate DPR
-        this.dpr = Math.min(window.devicePixelRatio || 1, 3);
-        this.textDpr = this.dpr;
-
         this.setupCanvas();
-        this.recalcLogicalSize();
-
-        this.isMobile = this.W < 768 || ('ontouchstart' in window);
-        this.isSmallScreen = this.W < 380;
-
-        this.target.x = this.W / 2;
-        this.target.y = this.H / 2 - 55;
-        this.target.radius = Math.min(this.W, this.H) * 0.155;
-
-        if (this.idleKnife) {
-            this.idleKnife.x = this.W / 2;
-            this.idleKnife.y = this.H - (this.isMobile ? 72 : 88);
-        }
-
-        this.MAX_PARTICLES = this.isMobile ? 50 : 120;
-        this.MAX_POP_RINGS = this.isMobile ? 8  : 16;
-        this.MAX_TRAIL     = this.isMobile ? 8  : 14;
-
-        this.stars   = this.makeStars(this.isMobile ? 25 : 70);
-        this.nebulae = this.makeNebulae();
+        this.W=this.canvas.width/this.dpr; this.H=this.canvas.height/this.dpr;
+        this.isMobile=this.W<768||('ontouchstart' in window); this.isSmallScreen=this.W<380;
+        this.target.x=this.W/2; this.target.y=this.H/2-55;
+        this.target.radius=Math.min(this.W,this.H)*0.155;
+        if (this.idleKnife){this.idleKnife.x=this.W/2;this.idleKnife.y=this.H-(this.isMobile?72:88);}
+        this.stars=this.makeStars(this.isMobile?25:70);
+        this.nebulae=this.makeNebulae();
     }
 
     destroy() {
